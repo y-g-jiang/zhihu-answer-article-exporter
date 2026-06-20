@@ -4,48 +4,89 @@ This document turns the current Zhihu article work into a repeatable engineering
 
 ## Outputs
 
-The pipeline produces three related outputs:
+The pipeline produces three related outputs plus one generated target manifest:
+
+0. `data/zhihu-targets.json`
+   - Exportable Zhihu URL collection.
+   - Generated from `constants.ts`, `contentSources.ts`, and `date-inference-results.json`.
+   - Contains the local exportable article/answer targets when generated.
 
 1. `article-export-sample/`
    - Raw export workspace inside this homepage project.
    - Contains source Markdown, source HTML, image manifests, compressed images, and original image backups.
+   - `articles.json` is the article collection consumed by every page builder.
 
 2. `public/zhihu/`
-   - Homepage preview pages.
+   - Homepage preview shell plus article pages.
    - These are copied into `dist/zhihu/` by Vite.
-   - Visual style follows the personal homepage: GitHub-like top bar, narrow sidebar metadata, restrained article panel.
+   - Visual style follows the personal homepage: GitHub-like top bar, narrow sidebar metadata, article-set navigation, restrained article panel.
 
 3. `../zhihu-articles/`
    - Standalone publishable article repository.
    - `docs/` is suitable for GitHub Pages.
    - `content/` keeps Markdown/HTML source and image manifests.
-   - `docs/assets/` contains compressed public images only.
+   - `docs/assets/` contains the shared shell CSS and compressed public images only.
 
 ## Full Run
 
 PowerShell may block npm shim scripts on this machine, so use direct Node commands when necessary:
 
 ```powershell
+node --check .\scripts\build-zhihu-targets.mjs
 node --check .\scripts\export-zhihu-sample.mjs
+node --check .\scripts\zhihu-site-shell.mjs
 node --check .\scripts\build-zhihu-preview-pages.mjs
 node --check .\scripts\build-zhihu-article-repo.mjs
 
+node .\scripts\build-zhihu-targets.mjs
 node .\scripts\export-zhihu-sample.mjs
 node .\scripts\build-zhihu-preview-pages.mjs
 node .\scripts\build-zhihu-article-repo.mjs
 node .\node_modules\vite\bin\vite.js build
 ```
 
+For this low-memory machine, prefer:
+
+```powershell
+$env:ZHIHU_BROWSER_CONCURRENCY='2'
+$env:ZHIHU_IMAGE_CONCURRENCY='6'
+node .\scripts\export-zhihu-sample.mjs
+```
+
+For batch export, use:
+
+```powershell
+$env:ZHIHU_OFFSET='0'
+$env:ZHIHU_LIMIT='10'
+$env:ZHIHU_SKIP_EXISTING='1'
+node .\scripts\export-zhihu-sample.mjs
+```
+
+`article-export-sample/articles.json` is merged across runs, so slices can be exported without losing previous article metadata.
+
 Equivalent npm scripts exist:
 
 ```powershell
-npm run export:zhihu:sample
+npm run zhihu:targets
+npm run export:zhihu
 npm run build:zhihu:preview
 npm run build:zhihu:repo
 npm run build
 ```
 
 ## Script Responsibilities
+
+### `scripts/build-zhihu-targets.mjs`
+
+This builds the target collection.
+
+Responsibilities:
+
+- Extract all Zhihu article and answer URLs from the homepage source files.
+- Merge approximate dates from `date-inference-results.json`.
+- Deduplicate URLs.
+- Preserve stable legacy slugs for the two already-reviewed pages.
+- Write `data/zhihu-targets.json`.
 
 ### `scripts/export-zhihu-sample.mjs`
 
@@ -54,15 +95,18 @@ This is the main exporter.
 Responsibilities:
 
 - Launch Edge through Playwright using a temporary copy of the local logged-in profile.
-- Visit each target in the `targets` array.
+- Read targets from `data/zhihu-targets.json`.
+- Visit each target with a small browser-page pool.
+- Block heavy image/media/font resource loads in the browser by default.
 - Expand collapsed Zhihu content when needed.
 - Select the right article or answer body.
 - Clean the body into portable HTML.
-- Download and compress images.
+- Download and compress images through a separate global image queue.
 - Write:
   - `article-export-sample/content/<slug>/index.html`
   - `article-export-sample/content/<slug>/index.md`
   - `article-export-sample/content/<slug>/images.json`
+  - `article-export-sample/articles.json`
   - `article-export-sample/export-report.json`
 
 Key target fields:
@@ -76,7 +120,29 @@ Key target fields:
 }
 ```
 
-To export another article, add another object to `targets`, rerun the full pipeline, then update preview metadata in the homepage if it should appear on the main page.
+Do not add targets inside the exporter. Regenerate or edit `data/zhihu-targets.json`.
+
+Important environment variables:
+
+- `ZHIHU_BROWSER_CONCURRENCY`: concurrent browser pages, default `3`; use `2` on low-memory runs.
+- `ZHIHU_IMAGE_CONCURRENCY`: global image download/compression concurrency, default `10`; use `6` on low-memory runs.
+- `ZHIHU_LIMIT` / `ZHIHU_OFFSET`: export a slice.
+- `ZHIHU_ONLY`: comma-separated slugs to export.
+- `ZHIHU_SKIP_EXISTING=1`: reuse existing content and refresh manifests.
+- `ZHIHU_BLOCK_HEAVY_RESOURCES=0`: allow browser image/media/font loading if needed for debugging.
+
+### `scripts/zhihu-site-shell.mjs`
+
+This is the shared article shell.
+
+Responsibilities:
+
+- Read `article-export-sample/articles.json`.
+- Normalize article metadata.
+- Provide the shared top bar, sidebar metadata, article-set navigation, CSS, and MathJax setup.
+- Render both the collection index and each article page.
+
+If a future sidebar, global nav item, theme change, or layout change should apply to every article, change this shell and rebuild.
 
 ### `scripts/build-zhihu-preview-pages.mjs`
 
@@ -85,8 +151,10 @@ This builds homepage-style static pages from `article-export-sample/`.
 Responsibilities:
 
 - Copy assets into `public/zhihu/assets`.
-- Build one page per exported article under `public/zhihu/<slug>/index.html`.
+- Write the shared shell CSS to `public/zhihu/assets/site.css`.
+- Build one page per exported article under `public/zhihu/<slug>/index.html` through `zhihu-site-shell.mjs`.
 - Build `public/zhihu/index.html`.
+- Write `public/zhihu/articles.json`.
 - Keep styling close to the personal homepage.
 - Preserve top publish-time metadata.
 - Load MathJax for formulas.
@@ -99,9 +167,10 @@ Responsibilities:
 
 - Recreate the output directory from scratch.
 - Copy `content/<slug>/` for source Markdown/HTML.
-- Build `docs/` pages from the homepage preview pages, but rewrite paths for a standalone repo.
+- Build `docs/` pages through the same `zhihu-site-shell.mjs` renderer.
 - Copy only compressed public images to `docs/assets/`.
 - Do not copy `original/` image backups.
+- Write `docs/assets/site.css` and `docs/articles.json`.
 - Write `README.md`, `.gitignore`, and `docs/.nojekyll`.
 
 GitHub Pages should be configured to serve from `main` / `docs`.
@@ -259,7 +328,7 @@ const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.
 (async () => {
   const browser = await chromium.launch({ executablePath: edgePath, headless: true });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.goto('http://127.0.0.1:4174/zhihu/article-color-bit-depth/', { waitUntil: 'domcontentloaded' });
+  await page.goto('http://127.0.0.1:4174/zhihu/<article-slug>/', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.MathJax?.startup?.promise, null, { timeout: 15000 }).catch(() => {});
   await page.evaluate(() => window.MathJax?.typesetPromise?.()).catch(() => {});
   await page.waitForTimeout(1000);
@@ -334,7 +403,7 @@ Do not create or publish a public remote repository without explicit confirmatio
 Current generated page URLs during local validation:
 
 - Homepage list: `http://127.0.0.1:4174/#zhihu-preview`
-- Homepage answer preview: `http://127.0.0.1:4174/zhihu/answer-100gm-decenter-simulation/`
-- Homepage article preview: `http://127.0.0.1:4174/zhihu/article-color-bit-depth/`
+- Homepage answer preview: `http://127.0.0.1:4174/zhihu/<answer-slug>/`
+- Homepage article preview: `http://127.0.0.1:4174/zhihu/<article-slug>/`
 - Standalone repo list: `http://127.0.0.1:4185/`
-- Standalone repo article: `http://127.0.0.1:4185/article-color-bit-depth/`
+- Standalone repo article: `http://127.0.0.1:4185/<article-slug>/`

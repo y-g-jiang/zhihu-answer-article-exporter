@@ -12,8 +12,26 @@ const commitMessage = process.env.GITHUB_COMMIT_MESSAGE || 'Publish Zhihu answer
 const dryRun = process.env.DRY_RUN === '1';
 const enablePages = process.env.ENABLE_PAGES === '1';
 
-const ignoredDirs = new Set(['.git', 'node_modules', 'qa-screenshots']);
+const ignoredDirs = new Set([
+  '.git',
+  'article-export-sample',
+  'content',
+  'dist',
+  'docs',
+  'node_modules',
+  'public',
+  'qa-screenshots',
+]);
 const ignoredFilePatterns = [/^\.env(?:\.|$)/, /\.log$/i, /^Thumbs\.db$/i, /^\.DS_Store$/i];
+const ignoredRepoPaths = new Set(['data/zhihu-targets.json', 'data/slug-overrides.local.json']);
+const remoteDeletePrefixes = [
+  'article-export-sample/',
+  'content/',
+  'dist/',
+  'docs/',
+  'public/',
+];
+const remoteDeletePaths = new Set(['data/zhihu-targets.json', 'data/slug-overrides.local.json']);
 
 const api = async (url, options = {}) => {
   if (!token) {
@@ -78,10 +96,15 @@ const walkFiles = async (dir, root = dir) => {
     }
 
     const absolute = path.join(dir, entry.name);
+    const repoPath = path.relative(root, absolute).replaceAll(path.sep, '/');
+    if (ignoredRepoPaths.has(repoPath)) {
+      continue;
+    }
+
     const stats = await fs.stat(absolute);
     files.push({
       absolute,
-      repoPath: path.relative(root, absolute).replaceAll(path.sep, '/'),
+      repoPath,
       size: stats.size,
     });
   }
@@ -143,6 +166,39 @@ const createBlob = async (owner, repo, file) => {
   };
 };
 
+const flattenTree = async (owner, repo, treeSha, prefix = '') => {
+  const tree = await api(`/repos/${owner}/${repo}/git/trees/${treeSha}`);
+  const entries = [];
+
+  for (const item of tree.tree ?? []) {
+    const itemPath = `${prefix}${item.path}`;
+    if (item.type === 'tree') {
+      entries.push(...(await flattenTree(owner, repo, item.sha, `${itemPath}/`)));
+      continue;
+    }
+
+    entries.push(itemPath);
+  }
+
+  return entries;
+};
+
+const remoteDeletionEntries = async (owner, repo, parentCommit) => {
+  if (!parentCommit?.tree?.sha) {
+    return [];
+  }
+
+  const paths = await flattenTree(owner, repo, parentCommit.tree.sha);
+  return paths
+    .filter((repoPath) => remoteDeletePaths.has(repoPath) || remoteDeletePrefixes.some((prefix) => repoPath.startsWith(prefix)))
+    .map((repoPath) => ({
+      path: repoPath,
+      mode: '100644',
+      type: 'blob',
+      sha: null,
+    }));
+};
+
 const configurePages = async (owner, repo) => {
   const existing = await apiMaybe(`/repos/${owner}/${repo}/pages`);
   if (existing) {
@@ -196,12 +252,16 @@ const run = async () => {
 
   console.log(`Uploading ${files.length} files to ${repoOwner}/${repoName}`);
   const treeEntries = await limitConcurrency(files, 6, (file) => createBlob(repoOwner, repoName, file));
+  const deleteEntries = await remoteDeletionEntries(repoOwner, repoName, parentCommit);
+  if (deleteEntries.length) {
+    console.log(`Removing ${deleteEntries.length} generated/private files from remote tree`);
+  }
 
   const tree = await api(`/repos/${repoOwner}/${repoName}/git/trees`, {
     method: 'POST',
     body: JSON.stringify({
       ...(parentCommit?.tree?.sha ? { base_tree: parentCommit.tree.sha } : {}),
-      tree: treeEntries,
+      tree: [...deleteEntries, ...treeEntries],
     }),
   });
 

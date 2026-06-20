@@ -1,71 +1,49 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  ensureDir,
+  readArticleBody,
+  readArticleCollection,
+  renderArticlePage,
+  renderIndexPage,
+  siteCss,
+} from './zhihu-site-shell.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const sampleRoot = path.join(repoRoot, 'article-export-sample');
-const publicZhihuRoot = path.join(repoRoot, 'public', 'zhihu');
-const docsRoot = path.join(repoRoot, 'docs');
-const contentRoot = path.join(repoRoot, 'content');
+const outputRoot = path.resolve(repoRoot, '..', 'zhihu-articles');
+const docsRoot = path.join(outputRoot, 'docs');
+const personalHomepageHref = 'https://y-g-jiang.github.io/';
 
-const pages = [
-  {
-    slug: 'answer-100gm-decenter-simulation',
-    label: 'Zhihu Answer',
-    date: '2026-05-14',
-  },
-  {
-    slug: 'article-color-bit-depth',
-    label: 'Zhihu Article',
-    date: '2026-06-15',
-  },
-];
-
-const ensureDir = (dir) => fs.mkdir(dir, { recursive: true });
-
-const stripTitle = (html) => {
-  const match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
-  return match?.[1]?.replace(/<[^>]+>/g, '').trim() || 'Zhihu Article';
+const writeJson = async (file, value) => {
+  await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 };
 
-const rewritePageForStandaloneRepo = (html) =>
-  html
-    .replaceAll('href="/"', 'href="../"')
-    .replaceAll('href="/#zhihu-preview"', 'href="../"')
-    .replaceAll('src="/zhihu/assets/', 'src="../assets/')
-    .replaceAll('href="/zhihu/', 'href="../')
-    .replaceAll('README_姜尧耕', 'Zhihu Articles')
-    .replaceAll('Preview List', 'Article List')
-    .replaceAll('Generated from local Zhihu export sample. Originals are kept in the project export folder.', 'Generated from Jiang Yaogeng Zhihu article exports.');
+const copyContent = async (articles) => {
+  const contentOutput = path.join(outputRoot, 'content');
+  await ensureDir(contentOutput);
 
-const rewriteIndexForStandaloneRepo = (html) =>
-  html
-    .replaceAll('href="/zhihu/', 'href="./')
-    .replaceAll('Zhihu Preview', 'Zhihu Articles');
-
-const readJson = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
-
-const copyContent = async () => {
-  await fs.rm(contentRoot, { recursive: true, force: true });
-  await ensureDir(contentRoot);
-
-  for (const page of pages) {
-    await fs.cp(path.join(sampleRoot, 'content', page.slug), path.join(contentRoot, page.slug), { recursive: true });
+  for (const article of articles) {
+    const from = path.join(sampleRoot, 'content', article.slug);
+    const to = path.join(contentOutput, article.slug);
+    await fs.cp(from, to, { recursive: true, force: true });
   }
 };
 
-const copyCompressedAssets = async () => {
+const copyCompressedAssets = async (articles) => {
   const fromRoot = path.join(sampleRoot, 'assets');
   const toRoot = path.join(docsRoot, 'assets');
   await ensureDir(toRoot);
+  await fs.writeFile(path.join(toRoot, 'site.css'), siteCss, 'utf8');
 
-  for (const page of pages) {
-    const fromDir = path.join(fromRoot, page.slug);
-    const toDir = path.join(toRoot, page.slug);
+  for (const article of articles.filter((item) => item.ok)) {
+    const fromDir = path.join(fromRoot, article.slug);
+    const toDir = path.join(toRoot, article.slug);
     await ensureDir(toDir);
 
-    const entries = await fs.readdir(fromDir, { withFileTypes: true });
+    const entries = await fs.readdir(fromDir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       if (entry.isDirectory()) {
         continue;
@@ -76,49 +54,104 @@ const copyCompressedAssets = async () => {
   }
 };
 
-const buildDocs = async () => {
-  await fs.rm(docsRoot, { recursive: true, force: true });
+const buildDocs = async (articles) => {
   await ensureDir(docsRoot);
-
-  const indexHtml = await fs.readFile(path.join(publicZhihuRoot, 'index.html'), 'utf8');
-  await fs.writeFile(path.join(docsRoot, 'index.html'), rewriteIndexForStandaloneRepo(indexHtml), 'utf8');
   await fs.writeFile(path.join(docsRoot, '.nojekyll'), '', 'utf8');
+  await writeJson(path.join(docsRoot, 'articles.json'), {
+    generatedAt: new Date().toISOString(),
+    articles,
+  });
 
-  for (const page of pages) {
-    const outputDir = path.join(docsRoot, page.slug);
+  await fs.writeFile(
+    path.join(docsRoot, 'index.html'),
+    renderIndexPage({
+      articles,
+      cssHref: './assets/site.css',
+      homeHref: personalHomepageHref,
+      indexHref: './',
+      linkForArticle: (article) => `./${article.slug}/`,
+    }),
+    'utf8'
+  );
+
+  for (const article of articles.filter((item) => item.ok)) {
+    const sourceHtml = await fs.readFile(path.join(sampleRoot, 'content', article.slug, 'index.html'), 'utf8');
+    const body = readArticleBody(sourceHtml, '../assets/');
+    const outputDir = path.join(docsRoot, article.slug);
+
     await ensureDir(outputDir);
-    const html = await fs.readFile(path.join(publicZhihuRoot, page.slug, 'index.html'), 'utf8');
-    await fs.writeFile(path.join(outputDir, 'index.html'), rewritePageForStandaloneRepo(html), 'utf8');
+    await fs.writeFile(
+      path.join(outputDir, 'index.html'),
+      renderArticlePage({
+        article,
+        body,
+        articles,
+        cssHref: '../assets/site.css',
+        homeHref: personalHomepageHref,
+        indexHref: '../',
+        linkForArticle: (item) => `../${item.slug}/`,
+      }),
+      'utf8'
+    );
   }
 };
 
-const updateReadmePages = async () => {
-  const rows = [];
+const buildReadme = async (articles) => {
+  const okCount = articles.filter((article) => article.ok).length;
+  const failedCount = articles.length - okCount;
+  const rows = articles.map((article) => {
+    const status = article.ok ? `${article.label}, ${article.date ?? 'undated'}, ${article.imageOkCount ?? 0} images` : `failed: ${article.error ?? 'unknown error'}`;
+    return `- [${article.title}](docs/${article.slug}/) - ${status}`;
+  });
 
-  for (const page of pages) {
-    const sourceHtml = await fs.readFile(path.join(sampleRoot, 'content', page.slug, 'index.html'), 'utf8');
-    const images = await readJson(path.join(sampleRoot, 'content', page.slug, 'images.json'));
-    rows.push({
-      ...page,
-      title: stripTitle(sourceHtml),
-      imageCount: images.filter((image) => image.ok).length,
-    });
-  }
+  const readme = `# Zhihu Articles
 
-  const pageList = rows.map((row) => `- [${row.title}](docs/${row.slug}/) - ${row.label}, ${row.date}, ${row.imageCount} images`).join('\n');
-  const readmePath = path.join(repoRoot, 'README.md');
-  const current = await fs.readFile(readmePath, 'utf8');
-  const next = current.replace(/## Current Pages[\s\S]*?## Structure/, `## Current Pages\n\n${pageList}\n\n## Structure`);
-  await fs.writeFile(readmePath, next, 'utf8');
+This repository contains standalone exports of Jiang Yaogeng's Zhihu articles and answers.
+
+## Pages
+
+${okCount} exported pages${failedCount ? `, ${failedCount} pending or failed exports` : ''}.
+
+${rows.join('\n')}
+
+## Structure
+
+- \`docs/\`: static pages suitable for GitHub Pages.
+- \`content/\`: source Markdown, HTML, and image manifests from the export pipeline.
+- \`docs/assets/\`: shared article shell CSS and compressed public images.
+
+The original Zhihu URLs and publish dates are preserved in the exported front matter and HTML metadata.
+`;
+
+  await fs.writeFile(path.join(outputRoot, 'README.md'), readme, 'utf8');
+};
+
+const buildGitignore = async () => {
+  const gitignore = `# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local transient files
+*.log
+`;
+
+  await fs.writeFile(path.join(outputRoot, '.gitignore'), gitignore, 'utf8');
 };
 
 const run = async () => {
-  await copyContent();
-  await buildDocs();
-  await copyCompressedAssets();
-  await updateReadmePages();
+  const articles = await readArticleCollection(sampleRoot);
 
-  console.log(`Built docs and content inside ${repoRoot}`);
+  await fs.rm(outputRoot, { recursive: true, force: true });
+  await ensureDir(outputRoot);
+
+  await copyContent(articles);
+  await buildDocs(articles);
+  await copyCompressedAssets(articles);
+  await buildReadme(articles);
+  await buildGitignore();
+
+  console.log(`Built standalone Zhihu article repository at ${outputRoot}`);
 };
 
 run().catch((error) => {

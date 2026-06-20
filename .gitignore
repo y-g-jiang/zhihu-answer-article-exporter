@@ -1,0 +1,27 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Dependency folders
+node_modules/
+
+# Logs and transient local output
+*.log
+qa-screenshots/
+**/original/
+
+# Generated exports and article content
+article-export-sample/
+content/
+docs/
+public/
+dist/
+
+# User-specific target manifests can contain private publishing history.
+data/zhihu-targets.json
+data/slug-overrides.local.json
+
+# Local credentials must never be committed
+.env
+.env.*

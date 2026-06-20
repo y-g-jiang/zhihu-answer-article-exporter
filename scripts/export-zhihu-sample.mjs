@@ -14,27 +14,78 @@ const outputRoot = path.join(repoRoot, 'article-export-sample');
 const contentRoot = path.join(outputRoot, 'content');
 const assetRoot = path.join(outputRoot, 'assets');
 const reportPath = path.join(outputRoot, 'export-report.json');
-const maxConcurrency = 14;
+const articleManifestPath = path.join(outputRoot, 'articles.json');
+const targetManifestPath = path.resolve(repoRoot, process.env.ZHIHU_TARGETS_PATH ?? path.join('data', 'zhihu-targets.json'));
+const browserConcurrency = Number.parseInt(process.env.ZHIHU_BROWSER_CONCURRENCY ?? process.env.ZHIHU_CONCURRENCY ?? '3', 10);
+const imageConcurrency = Number.parseInt(process.env.ZHIHU_IMAGE_CONCURRENCY ?? '10', 10);
+const retryCount = Number.parseInt(process.env.ZHIHU_RETRIES ?? '1', 10);
+const targetLimit = process.env.ZHIHU_LIMIT ? Number.parseInt(process.env.ZHIHU_LIMIT, 10) : null;
+const targetOffset = process.env.ZHIHU_OFFSET ? Number.parseInt(process.env.ZHIHU_OFFSET, 10) : 0;
+const onlySlugs = new Set((process.env.ZHIHU_ONLY ?? '').split(',').map((item) => item.trim()).filter(Boolean));
+const skipExisting = process.env.ZHIHU_SKIP_EXISTING === '1';
+const blockHeavyResources = process.env.ZHIHU_BLOCK_HEAVY_RESOURCES !== '0';
 const edgePath = process.env.EDGE_PATH ?? 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const edgeUserDataDir =
   process.env.EDGE_USER_DATA_DIR ?? path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'Edge', 'User Data');
 const edgeProfileDirectory = process.env.EDGE_PROFILE_DIRECTORY ?? 'Default';
 const headless = process.env.HEADLESS === '1';
 
-const targets = [
-  {
-    kind: 'answer',
-    slug: 'answer-100gm-decenter-simulation',
-    titleHint: '100GM歪轴仿真报告',
-    url: 'https://www.zhihu.com/question/300139587/answer/2038319263958741552',
-  },
-  {
-    kind: 'article',
-    slug: 'article-color-bit-depth',
-    titleHint: '关于色彩位深-bit数',
-    url: 'https://zhuanlan.zhihu.com/p/2049616049604244194',
-  },
-];
+const clampConcurrency = (value, fallback) => {
+  if (!Number.isFinite(value) || value < 1) {
+    return fallback;
+  }
+
+  return Math.max(1, Math.floor(value));
+};
+
+const readJson = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
+
+const normalizeTarget = (target) => ({
+  ...target,
+  kind: target.kind === 'answer' ? 'answer' : 'article',
+  titleHint: target.titleHint || target.title || 'Zhihu Export',
+  dateHint: target.dateHint || target.inferredDate || null,
+  zhihuId: target.zhihuId || getZhihuId(target.url),
+});
+
+const loadTargets = async () => {
+  let loaded;
+
+  try {
+    const manifest = await readJson(targetManifestPath);
+    loaded = Array.isArray(manifest) ? manifest : manifest.targets;
+  } catch (error) {
+    throw new Error(`Could not read ${path.relative(repoRoot, targetManifestPath)}: ${error.message}. Create data/zhihu-targets.json locally or set ZHIHU_TARGETS_PATH.`);
+  }
+
+  const seen = new Set();
+  let targets = loaded
+    .filter((target) => target?.url && (target.kind === 'article' || target.kind === 'answer'))
+    .map(normalizeTarget)
+    .filter((target) => {
+      const key = `${target.slug}::${target.url}`;
+      if (seen.has(key)) {
+        return false;
+      }
+
+      seen.add(key);
+      return true;
+    });
+
+  if (onlySlugs.size) {
+    targets = targets.filter((target) => onlySlugs.has(target.slug));
+  }
+
+  if (targetOffset > 0) {
+    targets = targets.slice(targetOffset);
+  }
+
+  if (targetLimit && targetLimit > 0) {
+    targets = targets.slice(0, targetLimit);
+  }
+
+  return targets;
+};
 
 const turndown = new TurndownService({
   codeBlockStyle: 'fenced',
@@ -129,11 +180,58 @@ const limitConcurrency = async (items, limit, worker) => {
   return results;
 };
 
+const createLimiter = (limit) => {
+  const maxActive = clampConcurrency(limit, 1);
+  const queue = [];
+  let active = 0;
+
+  const pump = () => {
+    while (active < maxActive && queue.length) {
+      const item = queue.shift();
+      active += 1;
+      Promise.resolve()
+        .then(item.task)
+        .then(item.resolve, item.reject)
+        .finally(() => {
+          active -= 1;
+          pump();
+        });
+    }
+  };
+
+  return (task) =>
+    new Promise((resolve, reject) => {
+      queue.push({ task, resolve, reject });
+      pump();
+    });
+};
+
+const imageLimiter = createLimiter(imageConcurrency);
+
 const cleanTitle = (title) =>
   title
     .replace(/\s+/g, ' ')
     .replace(/[\\/:*?"<>|]/g, '-')
     .trim();
+
+const labelForKind = (kind) => (kind === 'answer' ? 'Zhihu Answer' : 'Zhihu Article');
+const normalizeSourceHtmlDocument = (htmlDocument, target, publishedMeta) => {
+  let output = htmlDocument;
+  if (publishedMeta) {
+    output = output.replace(/<p class="export-meta">[^<]*<\/p>/, `<p class="export-meta">发布时间：${publishedMeta}</p>`);
+  }
+
+  return output.replace(/<p><a href="[^"]+">[^<]*<\/a><\/p>/, `<p><a href="${target.url}">知乎原文</a></p>`);
+};
+
+const isUsableZhihuBody = (pageInfo) => {
+  const bodyText = pageInfo.body?.text?.trim() ?? '';
+  const bodyLooksUsable = bodyText.length >= 80 || (bodyText.length >= 40 && (pageInfo.body?.imageCount ?? 0) > 0);
+  const bodyLooksPlaceholder = /^(0|零|\s){20,}$/.test(bodyText);
+  const pageLooksBlocked = /请求存在异常|安全验证|验证码|没有知识存在的荒原/.test(pageInfo.bodyTextStart ?? '');
+
+  return Boolean(pageInfo.body) && bodyLooksUsable && !bodyLooksPlaceholder && !pageLooksBlocked;
+};
 
 const normalizeTex = (value) => value.replace(/\s+/g, ' ').trim().replace(/\\\\\s*$/, '').trim();
 
@@ -395,7 +493,7 @@ const extractArticleLegacy = async (page, target) => {
     };
   }, target.titleHint);
 
-  if (!pageInfo.body || pageInfo.body.text.length < 180 || /请求存在异常|安全验证|登录|验证码/.test(pageInfo.bodyTextStart)) {
+  if (!isUsableZhihuBody(pageInfo)) {
     return {
       ok: false,
       target,
@@ -672,7 +770,7 @@ const extractArticle = async (page, target) => {
     };
   }, { fallbackTitle: target.titleHint, kind: target.kind, url: target.url });
 
-  if (!pageInfo.body || pageInfo.body.text.length < 180 || /请求存在异常|安全验证|验证码/.test(pageInfo.bodyTextStart)) {
+  if (!isUsableZhihuBody(pageInfo)) {
     return {
       ok: false,
       target,
@@ -686,6 +784,155 @@ const extractArticle = async (page, target) => {
     target,
     pageInfo,
   };
+};
+
+const shouldSkipExistingTarget = async (target) => {
+  if (!skipExisting) {
+    return false;
+  }
+
+  const htmlPath = path.join(contentRoot, target.slug, 'index.html');
+  const imagesPath = path.join(contentRoot, target.slug, 'images.json');
+
+  try {
+    await fs.access(htmlPath);
+    await fs.access(imagesPath);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const readExistingArticleSummary = async (target) => {
+  const contentDir = path.join(contentRoot, target.slug);
+  const htmlPath = path.join(contentDir, 'index.html');
+  const imagesPath = path.join(contentDir, 'images.json');
+  const html = await fs.readFile(htmlPath, 'utf8');
+  const images = await readJson(imagesPath).catch(() => []);
+  const titleMatch = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  const metaMatch = html.match(/<p class="export-meta">发布时间：([^<]+)<\/p>/);
+  const title = titleMatch?.[1]?.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim() || target.titleHint;
+  const imageOkCount = images.filter((image) => image.ok).length;
+
+  return {
+    ok: true,
+    skipped: true,
+    kind: target.kind,
+    label: labelForKind(target.kind),
+    slug: target.slug,
+    url: target.url,
+    zhihuId: getZhihuId(target.url),
+    title,
+    date: metaMatch?.[1]?.slice(0, 10) ?? target.dateHint ?? null,
+    publishedAt: null,
+    modifiedAt: null,
+    markdown: `content/${target.slug}/index.md`,
+    html: `content/${target.slug}/index.html`,
+    imageCount: images.length,
+    imageOkCount,
+    imageOriginalBytes: images.reduce((sum, image) => sum + (image.originalBytes ?? 0), 0),
+    imageOutputBytes: images.reduce((sum, image) => sum + (image.outputBytes ?? 0), 0),
+    textLength: null,
+  };
+};
+
+const mergeArticleManifests = async (currentArticles) => {
+  const existing = await readJson(articleManifestPath).catch(() => ({ articles: [] }));
+  const bySlug = new Map();
+
+  for (const article of existing.articles ?? []) {
+    if (article?.slug) {
+      bySlug.set(article.slug, article);
+    }
+  }
+
+  for (const article of currentArticles) {
+    if (article?.slug) {
+      bySlug.set(article.slug, article);
+    }
+  }
+
+  return [...bySlug.values()].sort((a, b) => {
+    const dateCompare = String(b.date ?? '').localeCompare(String(a.date ?? ''));
+    return dateCompare || String(a.slug).localeCompare(String(b.slug));
+  });
+};
+
+const configurePageForLowMemory = async (page) => {
+  if (!blockHeavyResources) {
+    return;
+  }
+
+  await page.route('**/*', async (route) => {
+    const request = route.request();
+    const resourceType = request.resourceType();
+    if (resourceType === 'image' || resourceType === 'media' || resourceType === 'font') {
+      await route.abort().catch(() => {});
+      return;
+    }
+
+    await route.continue().catch(() => {});
+  });
+};
+
+const summarizeFailure = (item) => ({
+  ok: false,
+  kind: item.target?.kind,
+  label: item.target ? labelForKind(item.target.kind) : null,
+  slug: item.target?.slug,
+  url: item.target?.url,
+  zhihuId: item.target?.url ? getZhihuId(item.target.url) : null,
+  title: item.pageInfo?.title ?? item.target?.titleHint ?? null,
+  date: item.target?.dateHint ?? null,
+  publishedAt: item.pageInfo?.publishedAt ?? null,
+  modifiedAt: item.pageInfo?.modifiedAt ?? null,
+  textLength: item.pageInfo?.body?.text?.length ?? null,
+  error: item.error,
+});
+
+const exportOneTarget = async (context, target, index, total) => {
+  if (await shouldSkipExistingTarget(target)) {
+    console.log(`[${index + 1}/${total}] skip existing ${target.slug}`);
+    return readExistingArticleSummary(target);
+  }
+
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    const page = await context.newPage();
+    await configurePageForLowMemory(page);
+
+    try {
+      const extracted = await extractArticle(page, target);
+      const saved = await saveExport(extracted);
+
+      if (!saved.ok) {
+        console.log(`[${index + 1}/${total}] failed ${target.slug}: ${saved.error}`);
+        return summarizeFailure(saved);
+      }
+
+      console.log(
+        `[${index + 1}/${total}] exported ${target.slug} (${saved.article.imageOkCount}/${saved.article.imageCount} images)`
+      );
+      return saved.article;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retryCount) {
+        console.warn(`[${index + 1}/${total}] retry ${attempt + 1} ${target.slug}: ${error.message}`);
+      }
+    } finally {
+      await page.close().catch(() => {});
+    }
+  }
+
+  const failed = {
+    ok: false,
+    target,
+    error: lastError?.message ?? 'Unknown export failure',
+  };
+  await saveExport(failed);
+  console.log(`[${index + 1}/${total}] failed ${target.slug}: ${failed.error}`);
+  return summarizeFailure(failed);
 };
 
 const saveExport = async (item) => {
@@ -711,24 +958,28 @@ const saveExport = async (item) => {
     .filter((image, index, array) => array.findIndex((other) => other.src === image.src) === index)
     .slice(0, 80);
 
-  const imageResults = await limitConcurrency(imageCandidates, maxConcurrency, async (image, index) => {
-    const name = imageNameFromUrl(image.src, index);
-    try {
-      const buffer = await fetchBinary(image.src, target.url);
-      return {
-        source: image.src,
-        alt: image.alt,
-        ...(await compressImage(buffer, name, imageDir)),
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        source: image.src,
-        alt: image.alt,
-        error: error.message,
-      };
-    }
-  });
+  const imageResults = await Promise.all(
+    imageCandidates.map((image, index) =>
+      imageLimiter(async () => {
+        const name = imageNameFromUrl(image.src, index);
+        try {
+          const buffer = await fetchBinary(image.src, target.url);
+          return {
+            source: image.src,
+            alt: image.alt,
+            ...(await compressImage(buffer, name, imageDir)),
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            source: image.src,
+            alt: image.alt,
+            error: error.message,
+          };
+        }
+      })
+    )
+  );
 
   const imageMap = new Map(imageResults.filter((image) => image.ok && image.source && image.output).map((image) => [image.source, `../../${image.output}`]));
   let html = item.pageInfo.body.html;
@@ -754,7 +1005,7 @@ const saveExport = async (item) => {
 
   const publishedMeta = formatZhihuDateTime(item.pageInfo.publishedAt);
 
-  const htmlDocument = `<!doctype html>
+  const htmlDocument = normalizeSourceHtmlDocument(`<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
@@ -795,7 +1046,7 @@ const saveExport = async (item) => {
   <p><a href="${target.url}">知乎原文</a></p>
   ${html}
 </body>
-</html>`;
+</html>`, target, publishedMeta);
 
   await fs.writeFile(path.join(contentDir, 'index.md'), markdown, 'utf8');
   await fs.writeFile(path.join(contentDir, 'index.html'), htmlDocument, 'utf8');
@@ -803,6 +1054,25 @@ const saveExport = async (item) => {
 
   return {
     ...item,
+    article: {
+      ok: true,
+      kind: target.kind,
+      label: labelForKind(target.kind),
+      slug,
+      url: target.url,
+      zhihuId: getZhihuId(target.url),
+      title: cleanTitle(item.pageInfo.title || target.titleHint),
+      publishedAt: item.pageInfo.publishedAt ?? null,
+      modifiedAt: item.pageInfo.modifiedAt ?? null,
+      date: formatZhihuDateOnly(item.pageInfo.publishedAt) ?? target.dateHint ?? null,
+      markdown: path.relative(outputRoot, path.join(contentDir, 'index.md')).replaceAll('\\', '/'),
+      html: path.relative(outputRoot, path.join(contentDir, 'index.html')).replaceAll('\\', '/'),
+      imageCount: imageResults.length,
+      imageOkCount: imageResults.filter((image) => image.ok).length,
+      imageOriginalBytes: imageResults.reduce((sum, image) => sum + (image.originalBytes ?? 0), 0),
+      imageOutputBytes: imageResults.reduce((sum, image) => sum + (image.outputBytes ?? 0), 0),
+      textLength: item.pageInfo.body?.text?.length ?? null,
+    },
     markdown: path.relative(outputRoot, path.join(contentDir, 'index.md')).replaceAll('\\', '/'),
     html: path.relative(outputRoot, path.join(contentDir, 'index.html')).replaceAll('\\', '/'),
     images: imageResults,
@@ -813,6 +1083,13 @@ const run = async () => {
   await ensureDir(outputRoot);
   await ensureDir(contentRoot);
   await ensureDir(assetRoot);
+  const targets = await loadTargets();
+  const effectiveBrowserConcurrency = Math.min(clampConcurrency(browserConcurrency, 3), Math.max(targets.length, 1));
+  const effectiveImageConcurrency = clampConcurrency(imageConcurrency, 10);
+
+  if (!targets.length) {
+    throw new Error('No Zhihu article or answer targets matched the current filters.');
+  }
 
   const profile = await prepareTemporaryEdgeProfile();
   let context;
@@ -828,27 +1105,23 @@ const run = async () => {
       args: [`--profile-directory=${edgeProfileDirectory}`, '--disable-blink-features=AutomationControlled'],
     });
 
-    const extracted = await limitConcurrency(targets, Math.min(maxConcurrency, targets.length), async (target) => {
-      const page = await context.newPage();
-      try {
-        return await extractArticle(page, target);
-      } catch (error) {
-        return {
-          ok: false,
-          target,
-          error: error.message,
-        };
-      } finally {
-        await page.close().catch(() => {});
-      }
-    });
+    console.log(
+      `Exporting ${targets.length} Zhihu targets with browserConcurrency=${effectiveBrowserConcurrency}, imageConcurrency=${effectiveImageConcurrency}, blockHeavyResources=${blockHeavyResources}`
+    );
 
-    await context.close();
+    const articles = await limitConcurrency(targets, effectiveBrowserConcurrency, (target, index) =>
+      exportOneTarget(context, target, index, targets.length)
+    );
+    const mergedArticles = await mergeArticleManifests(articles);
 
-    const saved = await limitConcurrency(extracted, maxConcurrency, saveExport);
     const report = {
       generatedAt: new Date().toISOString(),
-      maxConcurrency,
+      targetManifest: path.relative(repoRoot, targetManifestPath).replaceAll('\\', '/'),
+      browserConcurrency: effectiveBrowserConcurrency,
+      imageConcurrency: effectiveImageConcurrency,
+      retryCount,
+      blockHeavyResources,
+      skipExisting,
       browser: {
         executablePath: edgePath,
         profileSource: path.join(edgeUserDataDir, edgeProfileDirectory),
@@ -856,25 +1129,23 @@ const run = async () => {
         headless,
       },
       targets,
-      results: saved.map((item) => ({
-        ok: item.ok,
-        kind: item.target.kind,
-        slug: item.target.slug,
-        url: item.target.url,
-        title: item.pageInfo?.title,
-        publishedAt: item.pageInfo?.publishedAt,
-        modifiedAt: item.pageInfo?.modifiedAt,
-        textLength: item.pageInfo?.body?.text?.length,
-        markdown: item.markdown,
-        html: item.html,
-        imageCount: item.images?.length ?? 0,
-        imageOkCount: item.images?.filter((image) => image.ok).length ?? 0,
-        imageOriginalBytes: item.images?.reduce((sum, image) => sum + (image.originalBytes ?? 0), 0) ?? 0,
-        imageOutputBytes: item.images?.reduce((sum, image) => sum + (image.outputBytes ?? 0), 0) ?? 0,
-        error: item.error,
-      })),
+      results: articles,
+      mergedResultCount: mergedArticles.length,
     };
 
+    await fs.writeFile(
+      articleManifestPath,
+      `${JSON.stringify(
+        {
+          generatedAt: report.generatedAt,
+          source: 'article-export-sample',
+          articles: mergedArticles,
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
     await fs.writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
     console.log(JSON.stringify(report, null, 2));
   } finally {

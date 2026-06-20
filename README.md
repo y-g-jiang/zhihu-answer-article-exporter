@@ -1,24 +1,45 @@
 # zhihu-answer-article-exporter
 
-Repeatable exporter for Jiang Yaogeng's own Zhihu answers/articles.
+Repeatable exporter for a user's own Zhihu answers/articles.
 
-It captures selected Zhihu pages from a logged-in local Edge profile, cleans Zhihu-specific HTML, compresses images, converts Zhihu LaTeX formula nodes into MathJax-renderable TeX, and emits both source files and GitHub Pages-ready static pages.
+This repository contains the engineering workflow only. It intentionally does not publish exported article bodies, generated pages, image assets, or a concrete target manifest.
 
-## Current Pages
+## What It Does
 
-- [如何判断镜头光轴有偏移？](docs/answer-100gm-decenter-simulation/) - Zhihu Answer, 2026-05-14, 6 images
-- [相机史诗级智商税：色彩位深-bit数](docs/article-color-bit-depth/) - Zhihu Article, 2026-06-15, 8 images
+- captures Zhihu pages from a logged-in local Edge profile;
+- cleans Zhihu-specific HTML into portable HTML and Markdown;
+- preserves ordinary links and rich link cards;
+- removes Zhihu Direct/entity links and local file links;
+- downloads and compresses images into local assets;
+- converts Zhihu LaTeX nodes into MathJax-renderable TeX;
+- builds a shared shell plus an article collection so global layout changes apply to every exported page.
 
-## Structure
+## Private Local Inputs And Outputs
 
-- `scripts/`: exporter and build scripts.
-- `article-export-sample/`: generated source Markdown/HTML, image manifests, and compressed sample assets.
-- `public/zhihu/`: homepage-style preview pages.
-- `docs/`: standalone GitHub Pages output.
-- `content/`: publishable source Markdown/HTML copied beside `docs/`.
-- `AGENTS.md`: instructions for future AI agents.
-- `ZHIHU_EXPORT_PIPELINE.md`: full engineering handoff manual.
-- `zhihu-pipeline.manifest.json`: machine-readable workflow manifest.
+These paths are generated or user-specific and are ignored by the publishing script:
+
+- `data/zhihu-targets.json`
+- `data/slug-overrides.local.json`
+- `article-export-sample/`
+- `public/`
+- `docs/`
+- `content/`
+- `dist/`
+
+Create `data/zhihu-targets.json` locally with records like:
+
+```json
+{
+  "targets": [
+    {
+      "kind": "article",
+      "slug": "my-private-slug",
+      "titleHint": "Optional fallback title",
+      "url": "https://zhuanlan.zhihu.com/p/..."
+    }
+  ]
+}
+```
 
 ## Commands
 
@@ -32,29 +53,51 @@ npm run build
 When PowerShell blocks npm shims, use direct Node commands:
 
 ```powershell
+node --check .\scripts\build-zhihu-targets.mjs
 node --check .\scripts\export-zhihu-sample.mjs
+node --check .\scripts\zhihu-site-shell.mjs
 node --check .\scripts\build-zhihu-preview-pages.mjs
 node --check .\scripts\build-zhihu-article-repo.mjs
+```
+
+Low-memory export:
+
+```powershell
+$env:ZHIHU_BROWSER_CONCURRENCY='2'
+$env:ZHIHU_IMAGE_CONCURRENCY='6'
+$env:ZHIHU_SKIP_EXISTING='1'
 node .\scripts\export-zhihu-sample.mjs
-node .\scripts\build-zhihu-preview-pages.mjs
-node .\scripts\build-zhihu-article-repo.mjs
+```
+
+Batch export:
+
+```powershell
+$env:ZHIHU_OFFSET='0'
+$env:ZHIHU_LIMIT='10'
+$env:ZHIHU_SKIP_EXISTING='1'
+node .\scripts\export-zhihu-sample.mjs
 ```
 
 ## Local Preview
 
-Serve `docs/` as a static site:
+After exporting and building locally:
 
 ```powershell
-python -m http.server 4185 --bind 127.0.0.1
+python -m http.server 4185 --bind 127.0.0.1 --directory ..\zhihu-articles\docs
 ```
 
 Open:
 
 - `http://127.0.0.1:4185/`
-- `http://127.0.0.1:4185/article-color-bit-depth/`
+- `http://127.0.0.1:4185/<article-slug>/`
 
-## Publishing
+## Publishing This Engineering Repo
 
-Enable GitHub Pages from `main` / `docs`.
+`scripts/publish-github.mjs` uploads only source scripts, docs, and config. It skips generated article content and target manifests even if those folders exist locally.
 
-Read [ZHIHU_EXPORT_PIPELINE.md](ZHIHU_EXPORT_PIPELINE.md) before changing the exporter. It documents the required cleanup rules, formula conversion policy, and browser verification checks.
+```powershell
+$env:GITHUB_TOKEN='...'
+npm run publish:github
+```
+
+Read [ZHIHU_EXPORT_PIPELINE.md](ZHIHU_EXPORT_PIPELINE.md) before changing the exporter.

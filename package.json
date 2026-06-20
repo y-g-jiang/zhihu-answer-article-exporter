@@ -5,11 +5,12 @@
   "type": "module",
   "description": "Export Jiang Yaogeng's Zhihu answers/articles into portable Markdown, rendered HTML, homepage-style previews, and GitHub Pages-ready docs.",
   "scripts": {
+    "targets": "node scripts/build-zhihu-targets.mjs",
     "export": "node scripts/export-zhihu-sample.mjs",
     "build:preview": "node scripts/build-zhihu-preview-pages.mjs",
     "build:repo": "node scripts/build-zhihu-article-repo.mjs",
     "build": "node scripts/build-zhihu-preview-pages.mjs && node scripts/build-zhihu-article-repo.mjs",
-    "check": "node --check scripts/export-zhihu-sample.mjs && node --check scripts/build-zhihu-preview-pages.mjs && node --check scripts/build-zhihu-article-repo.mjs && node --check scripts/publish-github.mjs",
+    "check": "node --check scripts/build-zhihu-targets.mjs && node --check scripts/export-zhihu-sample.mjs && node --check scripts/zhihu-site-shell.mjs && node --check scripts/build-zhihu-preview-pages.mjs && node --check scripts/build-zhihu-article-repo.mjs && node --check scripts/publish-github.mjs",
     "publish:github": "node scripts/publish-github.mjs"
   },
   "dependencies": {

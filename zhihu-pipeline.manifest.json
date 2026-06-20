@@ -1,38 +1,34 @@
 {
-  "name": "jiang-zhihu-export-pipeline",
-  "owner": "Jiang Yaogeng",
-  "purpose": "Export the user's own Zhihu answers/articles into portable Markdown, rendered HTML, homepage preview pages, and a standalone GitHub Pages-ready repository.",
+  "name": "zhihu-answer-article-exporter",
+  "purpose": "Export a user's own Zhihu answers/articles into portable Markdown, rendered HTML, homepage preview pages, and a standalone static article collection.",
   "manual": "ZHIHU_EXPORT_PIPELINE.md",
   "agentInstructions": "AGENTS.md",
+  "privacy": {
+    "publishArticleContent": false,
+    "publishGeneratedTargets": false,
+    "privateOutputs": [
+      "article-export-sample/",
+      "content/",
+      "docs/",
+      "public/",
+      "data/zhihu-targets.json",
+      "data/slug-overrides.local.json"
+    ]
+  },
   "scripts": {
+    "targets": "node scripts/build-zhihu-targets.mjs",
     "export": "node scripts/export-zhihu-sample.mjs",
-    "buildHomepagePreview": "node scripts/build-zhihu-preview-pages.mjs",
+    "buildPreview": "node scripts/build-zhihu-preview-pages.mjs",
     "buildStandaloneRepo": "node scripts/build-zhihu-article-repo.mjs",
-    "buildHomepage": "node node_modules/vite/bin/vite.js build"
+    "publishGithub": "node scripts/publish-github.mjs"
   },
   "outputs": {
     "exportWorkspace": "article-export-sample",
     "homepagePreview": "public/zhihu",
-    "homepageDist": "dist/zhihu",
     "standaloneRepo": "../zhihu-articles",
     "standalonePages": "../zhihu-articles/docs",
     "standaloneSource": "../zhihu-articles/content"
   },
-  "currentTargets": [
-    {
-      "kind": "answer",
-      "slug": "answer-100gm-decenter-simulation",
-      "url": "https://www.zhihu.com/question/300139587/answer/2038319263958741552",
-      "expectedPublishDateChina": "2026-05-14 18:06"
-    },
-    {
-      "kind": "article",
-      "slug": "article-color-bit-depth",
-      "url": "https://zhuanlan.zhihu.com/p/2049616049604244194",
-      "expectedPublishDateChina": "2026-06-15 21:25",
-      "expectedMathCount": 21
-    }
-  ],
   "cleanupPolicy": {
     "removeZhihuDirectEntityLinks": true,
     "unwrapLinkZhihuTargets": true,
@@ -50,33 +46,5 @@
     "markdownInlineDelimiter": "$...$",
     "markdownDisplayDelimiter": "$$...$$",
     "renderer": "MathJax 3 tex-svg"
-  },
-  "verification": {
-    "requiredCommands": [
-      "node --check scripts/export-zhihu-sample.mjs",
-      "node --check scripts/build-zhihu-preview-pages.mjs",
-      "node --check scripts/build-zhihu-article-repo.mjs",
-      "node scripts/export-zhihu-sample.mjs",
-      "node scripts/build-zhihu-preview-pages.mjs",
-      "node scripts/build-zhihu-article-repo.mjs",
-      "node node_modules/vite/bin/vite.js build"
-    ],
-    "forbiddenPatterns": [
-      "zhida.zhihu.com",
-      "zhida_source",
-      "RichContent-EntityWord",
-      "file://",
-      "C:/Users",
-      "src=\"/zhihu",
-      "href=\"/zhihu"
-    ],
-    "browserChecks": [
-      "No broken images",
-      "No Zhihu Direct links",
-      "No local file links",
-      "Publish time is the first article metadata line",
-      "MathJax mjx-container count matches data-export-kind=math count",
-      "Mobile viewport has no document-level horizontal overflow"
-    ]
   }
 }

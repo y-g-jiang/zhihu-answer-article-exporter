@@ -11,9 +11,10 @@ When asked to continue the Zhihu work, preserve the same workflow:
 3. Compress and localize images.
 4. Preserve real link cards, but remove Zhihu Direct entity links.
 5. Convert Zhihu LaTeX formula nodes into renderable TeX and load MathJax in generated HTML.
-6. Build homepage preview pages under `public/zhihu`.
-7. Build a standalone publishable article repository at `../zhihu-articles`.
-8. Verify generated pages in browser before reporting completion.
+6. Keep the exported article collection in `article-export-sample/articles.json`.
+7. Build homepage preview pages under `public/zhihu` from a shared shell plus the article collection.
+8. Build a standalone publishable article repository at `../zhihu-articles` from the same shared shell.
+9. Verify generated pages in browser before reporting completion.
 
 The articles are the user's own writing. Do not remove content merely because it came from Zhihu.
 
@@ -22,6 +23,7 @@ The articles are the user's own writing. Do not remove content merely because it
 Use Node directly in PowerShell when npm scripts are blocked by execution policy:
 
 ```powershell
+node .\scripts\build-zhihu-targets.mjs
 node .\scripts\export-zhihu-sample.mjs
 node .\scripts\build-zhihu-preview-pages.mjs
 node .\scripts\build-zhihu-article-repo.mjs
@@ -31,6 +33,8 @@ node .\node_modules\vite\bin\vite.js build
 Equivalent npm scripts:
 
 ```powershell
+npm run zhihu:targets
+npm run export:zhihu
 npm run export:zhihu:sample
 npm run build:zhihu:preview
 npm run build:zhihu:repo
@@ -39,10 +43,14 @@ npm run build
 
 ## Important Paths
 
+- `scripts/build-zhihu-targets.mjs`: generates `data/zhihu-targets.json` from homepage source files.
 - `scripts/export-zhihu-sample.mjs`: authenticated Zhihu export, body cleanup, image compression, Markdown/HTML writing.
+- `scripts/zhihu-site-shell.mjs`: shared shell renderer, article-set navigation, CSS, and MathJax setup.
 - `scripts/build-zhihu-preview-pages.mjs`: builds homepage-style static pages under `public/zhihu`.
 - `scripts/build-zhihu-article-repo.mjs`: builds the standalone publish repo at `../zhihu-articles`.
+- `data/zhihu-targets.json`: export target collection. Regenerate it instead of editing many script constants.
 - `article-export-sample/`: generated export source and image artifacts.
+- `article-export-sample/articles.json`: article collection manifest consumed by all page builders.
 - `public/zhihu/`: homepage preview source copied into the Vite build.
 - `dist/zhihu/`: production output after `vite build`.
 - `../zhihu-articles/`: standalone repository folder, with `docs/` for GitHub Pages and `content/` for Markdown/HTML source.
@@ -73,14 +81,27 @@ Keep these behaviors unless the user explicitly changes the policy:
 After changing the pipeline, run:
 
 ```powershell
+node --check .\scripts\build-zhihu-targets.mjs
 node --check .\scripts\export-zhihu-sample.mjs
+node --check .\scripts\zhihu-site-shell.mjs
 node --check .\scripts\build-zhihu-preview-pages.mjs
 node --check .\scripts\build-zhihu-article-repo.mjs
+node .\scripts\build-zhihu-targets.mjs
 node .\scripts\export-zhihu-sample.mjs
 node .\scripts\build-zhihu-preview-pages.mjs
 node .\scripts\build-zhihu-article-repo.mjs
 node .\node_modules\vite\bin\vite.js build
 ```
+
+On this small-memory machine, prefer:
+
+```powershell
+$env:ZHIHU_BROWSER_CONCURRENCY='2'
+$env:ZHIHU_IMAGE_CONCURRENCY='6'
+node .\scripts\export-zhihu-sample.mjs
+```
+
+For batch runs, use `ZHIHU_OFFSET`, `ZHIHU_LIMIT`, `ZHIHU_ONLY`, and `ZHIHU_SKIP_EXISTING=1`. The exporter merges `article-export-sample/articles.json` across runs.
 
 Then check generated files:
 
