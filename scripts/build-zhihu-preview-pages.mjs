@@ -14,10 +14,40 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const sampleRoot = path.join(repoRoot, 'article-export-sample');
 const publicRoot = path.join(repoRoot, 'public', 'zhihu');
+const targetManifestPath = path.join(repoRoot, 'data', 'zhihu-targets.json');
 
 const writeJson = async (file, value) => {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 };
+
+const readJson = async (file) => JSON.parse(await fs.readFile(file, 'utf8'));
+
+const readDisplayTitleMap = async () => {
+  const manifest = await readJson(targetManifestPath).catch(() => null);
+  const map = new Map();
+
+  for (const target of manifest?.targets ?? []) {
+    if (!target?.titleHint) {
+      continue;
+    }
+
+    for (const key of [target.slug, target.url, target.zhihuId].filter(Boolean)) {
+      map.set(String(key), target.titleHint);
+    }
+  }
+
+  return map;
+};
+
+const applyDisplayTitles = (articles, displayTitleMap) =>
+  articles.map((article) => {
+    const displayTitle =
+      displayTitleMap.get(String(article.slug)) ||
+      displayTitleMap.get(String(article.url)) ||
+      displayTitleMap.get(String(article.zhihuId));
+
+    return displayTitle ? { ...article, displayTitle } : article;
+  });
 
 const copyAssets = async () => {
   const sourceAssets = path.join(sampleRoot, 'assets');
@@ -69,7 +99,8 @@ const buildIndex = async (articles) => {
 };
 
 const run = async () => {
-  const articles = await readArticleCollection(sampleRoot);
+  const displayTitleMap = await readDisplayTitleMap();
+  const articles = applyDisplayTitles(await readArticleCollection(sampleRoot), displayTitleMap);
 
   await fs.rm(publicRoot, { recursive: true, force: true });
   await ensureDir(publicRoot);

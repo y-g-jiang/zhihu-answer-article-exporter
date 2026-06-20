@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
-const outputRoot = path.join(repoRoot, 'article-export-sample');
+const outputRoot = path.resolve(repoRoot, process.env.ZHIHU_OUTPUT_ROOT ?? 'article-export-sample');
 const contentRoot = path.join(outputRoot, 'content');
 const assetRoot = path.join(outputRoot, 'assets');
 const reportPath = path.join(outputRoot, 'export-report.json');
@@ -29,6 +29,9 @@ const edgeUserDataDir =
   process.env.EDGE_USER_DATA_DIR ?? path.join(process.env.LOCALAPPDATA ?? '', 'Microsoft', 'Edge', 'User Data');
 const edgeProfileDirectory = process.env.EDGE_PROFILE_DIRECTORY ?? 'Default';
 const headless = process.env.HEADLESS === '1';
+const browserProfileRoot = process.env.ZHIHU_BROWSER_PROFILE_ROOT
+  ? path.resolve(repoRoot, process.env.ZHIHU_BROWSER_PROFILE_ROOT)
+  : null;
 
 const clampConcurrency = (value, fallback) => {
   if (!Number.isFinite(value) || value < 1) {
@@ -150,6 +153,11 @@ const copyIfExists = async (from, to) => {
 };
 
 const prepareTemporaryEdgeProfile = async () => {
+  if (browserProfileRoot) {
+    await ensureDir(browserProfileRoot);
+    return { tempRoot: null, tempUserData: browserProfileRoot, keep: true, sourceProfile: browserProfileRoot };
+  }
+
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'zhihu-edge-profile-'));
   const tempUserData = path.join(tempRoot, 'User Data');
   const sourceProfile = path.join(edgeUserDataDir, edgeProfileDirectory);
@@ -161,7 +169,7 @@ const prepareTemporaryEdgeProfile = async () => {
   await copyIfExists(path.join(sourceProfile, 'Cookies'), path.join(targetProfile, 'Cookies'));
   await copyIfExists(path.join(sourceProfile, 'Network', 'Cookies'), path.join(targetProfile, 'Network', 'Cookies'));
 
-  return { tempRoot, tempUserData };
+  return { tempRoot, tempUserData, keep: false, sourceProfile };
 };
 
 const limitConcurrency = async (items, limit, worker) => {
@@ -224,13 +232,18 @@ const normalizeSourceHtmlDocument = (htmlDocument, target, publishedMeta) => {
   return output.replace(/<p><a href="[^"]+">[^<]*<\/a><\/p>/, `<p><a href="${target.url}">知乎原文</a></p>`);
 };
 
-const isUsableZhihuBody = (pageInfo) => {
+const isUsableZhihuBody = (pageInfo, target = null) => {
   const bodyText = pageInfo.body?.text?.trim() ?? '';
   const bodyLooksUsable = bodyText.length >= 80 || (bodyText.length >= 40 && (pageInfo.body?.imageCount ?? 0) > 0);
+  const shortTargetAnswerLooksUsable =
+    target?.kind === 'answer' &&
+    bodyText.length >= 8 &&
+    pageInfo.body?.selector?.includes('AnswerItem meta[itemprop="url"]') &&
+    pageInfo.body?.selector?.includes('-> RichText');
   const bodyLooksPlaceholder = /^(0|零|\s){20,}$/.test(bodyText);
   const pageLooksBlocked = /请求存在异常|安全验证|验证码|没有知识存在的荒原/.test(pageInfo.bodyTextStart ?? '');
 
-  return Boolean(pageInfo.body) && bodyLooksUsable && !bodyLooksPlaceholder && !pageLooksBlocked;
+  return Boolean(pageInfo.body) && (bodyLooksUsable || shortTargetAnswerLooksUsable) && !bodyLooksPlaceholder && !pageLooksBlocked;
 };
 
 const normalizeTex = (value) => value.replace(/\s+/g, ' ').trim().replace(/\\\\\s*$/, '').trim();
@@ -493,7 +506,7 @@ const extractArticleLegacy = async (page, target) => {
     };
   }, target.titleHint);
 
-  if (!isUsableZhihuBody(pageInfo)) {
+  if (!isUsableZhihuBody(pageInfo, target)) {
     return {
       ok: false,
       target,
@@ -682,6 +695,8 @@ const extractArticle = async (page, target) => {
         selector.includes('QuestionAnswer-content') || selector.includes('Post-RichText') || selector.includes('[itemprop="text"]')
           ? 1600
           : 0;
+      const exactAnswerBonus =
+        selector.includes('AnswerItem meta[itemprop="url"]') && selector.includes('-> RichText') ? 2400 : 0;
 
       return {
         selector,
@@ -690,7 +705,7 @@ const extractArticle = async (page, target) => {
         html: cloneForExport(element).innerHTML,
         text,
         imageCount,
-        score: text.length + imageCount * 120 + selectorBonus - collapsedPenalty - chromePenalty,
+        score: text.length + imageCount * 120 + selectorBonus + exactAnswerBonus - collapsedPenalty - chromePenalty,
       };
     };
 
@@ -770,7 +785,7 @@ const extractArticle = async (page, target) => {
     };
   }, { fallbackTitle: target.titleHint, kind: target.kind, url: target.url });
 
-  if (!isUsableZhihuBody(pageInfo)) {
+  if (!isUsableZhihuBody(pageInfo, target)) {
     return {
       ok: false,
       target,
@@ -1124,8 +1139,8 @@ const run = async () => {
       skipExisting,
       browser: {
         executablePath: edgePath,
-        profileSource: path.join(edgeUserDataDir, edgeProfileDirectory),
-        usedTemporaryProfile: true,
+        profileSource: profile.sourceProfile,
+        usedTemporaryProfile: !profile.keep,
         headless,
       },
       targets,
@@ -1138,7 +1153,7 @@ const run = async () => {
       `${JSON.stringify(
         {
           generatedAt: report.generatedAt,
-          source: 'article-export-sample',
+          source: path.relative(repoRoot, outputRoot).replaceAll('\\', '/'),
           articles: mergedArticles,
         },
         null,
@@ -1153,7 +1168,9 @@ const run = async () => {
       await context.close().catch(() => {});
     }
 
-    await fs.rm(profile.tempRoot, { recursive: true, force: true }).catch(() => {});
+    if (!profile.keep && profile.tempRoot) {
+      await fs.rm(profile.tempRoot, { recursive: true, force: true }).catch(() => {});
+    }
   }
 };
 

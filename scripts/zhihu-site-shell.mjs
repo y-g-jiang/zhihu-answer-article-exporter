@@ -48,6 +48,7 @@ export const normalizeArticle = (article) => ({
   url: article.url,
   zhihuId: article.zhihuId ?? null,
   title: article.title || article.titleHint || article.slug || 'Zhihu Article',
+  displayTitle: article.displayTitle || article.titleHint || article.title || article.slug || 'Zhihu Article',
   publishedAt: article.publishedAt ?? null,
   modifiedAt: article.modifiedAt ?? null,
   date: article.date || dateOnly(article.publishedAt) || dateOnly(article.dateHint) || null,
@@ -546,12 +547,13 @@ const renderCollectionNav = ({ articles, currentSlug, linkForArticle }) => `<nav
   ${articles
     .map((article) => {
       const label = `${article.date ?? 'undated'} &middot; ${article.kind === 'answer' ? 'Answer' : 'Article'}`;
+      const title = article.displayTitle || article.title;
       if (!article.ok) {
-        return `<span class="failed"><small>${escapeHtml(label)}</small>${escapeHtml(article.title)}</span>`;
+        return `<span class="failed"><small>${escapeHtml(label)}</small>${escapeHtml(title)}</span>`;
       }
 
       const active = article.slug === currentSlug ? ' class="active"' : '';
-      return `<a${active} href="${escapeHtml(linkForArticle(article))}"><small>${escapeHtml(label)}</small>${escapeHtml(article.title)}</a>`;
+      return `<a${active} href="${escapeHtml(linkForArticle(article))}"><small>${escapeHtml(label)}</small>${escapeHtml(title)}</a>`;
     })
     .join('\n')}
 </nav>`;

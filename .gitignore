@@ -10,6 +10,10 @@ node_modules/
 *.log
 qa-screenshots/
 **/original/
+browser-profile/
+**/browser-profile/
+profile-debug*.json
+profile-debug*.png
 
 # Generated exports and article content
 article-export-sample/

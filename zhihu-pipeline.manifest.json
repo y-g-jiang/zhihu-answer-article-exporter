@@ -13,11 +13,19 @@
       "public/",
       "data/zhihu-targets.json",
       "data/slug-overrides.local.json"
+    ],
+    "privateState": [
+      "browser-profile/",
+      "**/browser-profile/",
+      "profile-debug*.json",
+      "profile-debug*.png"
     ]
   },
   "scripts": {
     "targets": "node scripts/build-zhihu-targets.mjs",
+    "collectProfilePosts": "node scripts/collect-zhihu-profile-posts.mjs",
     "export": "node scripts/export-zhihu-sample.mjs",
+    "buildLocalSite": "node scripts/build-zhihu-local-site.mjs",
     "buildPreview": "node scripts/build-zhihu-preview-pages.mjs",
     "buildStandaloneRepo": "node scripts/build-zhihu-article-repo.mjs",
     "publishGithub": "node scripts/publish-github.mjs"

@@ -21,8 +21,9 @@ const ignoredDirs = new Set([
   'node_modules',
   'public',
   'qa-screenshots',
+  'browser-profile',
 ]);
-const ignoredFilePatterns = [/^\.env(?:\.|$)/, /\.log$/i, /^Thumbs\.db$/i, /^\.DS_Store$/i];
+const ignoredFilePatterns = [/^\.env(?:\.|$)/, /\.log$/i, /^Thumbs\.db$/i, /^\.DS_Store$/i, /^profile-debug.*\.(?:json|png)$/i];
 const ignoredRepoPaths = new Set(['data/zhihu-targets.json', 'data/slug-overrides.local.json']);
 const remoteDeletePrefixes = [
   'article-export-sample/',
@@ -30,6 +31,7 @@ const remoteDeletePrefixes = [
   'dist/',
   'docs/',
   'public/',
+  'browser-profile/',
 ];
 const remoteDeletePaths = new Set(['data/zhihu-targets.json', 'data/slug-overrides.local.json']);
 
