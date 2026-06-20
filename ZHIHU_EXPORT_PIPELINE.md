@@ -1,0 +1,340 @@
+# Zhihu Export Pipeline
+
+This document turns the current Zhihu article work into a repeatable engineering workflow. It is written for a future AI or human maintainer who needs to export more of Jiang Yaogeng's own Zhihu writing, preview it on the personal homepage, and prepare a standalone article repository.
+
+## Outputs
+
+The pipeline produces three related outputs:
+
+1. `article-export-sample/`
+   - Raw export workspace inside this homepage project.
+   - Contains source Markdown, source HTML, image manifests, compressed images, and original image backups.
+
+2. `public/zhihu/`
+   - Homepage preview pages.
+   - These are copied into `dist/zhihu/` by Vite.
+   - Visual style follows the personal homepage: GitHub-like top bar, narrow sidebar metadata, restrained article panel.
+
+3. `../zhihu-articles/`
+   - Standalone publishable article repository.
+   - `docs/` is suitable for GitHub Pages.
+   - `content/` keeps Markdown/HTML source and image manifests.
+   - `docs/assets/` contains compressed public images only.
+
+## Full Run
+
+PowerShell may block npm shim scripts on this machine, so use direct Node commands when necessary:
+
+```powershell
+node --check .\scripts\export-zhihu-sample.mjs
+node --check .\scripts\build-zhihu-preview-pages.mjs
+node --check .\scripts\build-zhihu-article-repo.mjs
+
+node .\scripts\export-zhihu-sample.mjs
+node .\scripts\build-zhihu-preview-pages.mjs
+node .\scripts\build-zhihu-article-repo.mjs
+node .\node_modules\vite\bin\vite.js build
+```
+
+Equivalent npm scripts exist:
+
+```powershell
+npm run export:zhihu:sample
+npm run build:zhihu:preview
+npm run build:zhihu:repo
+npm run build
+```
+
+## Script Responsibilities
+
+### `scripts/export-zhihu-sample.mjs`
+
+This is the main exporter.
+
+Responsibilities:
+
+- Launch Edge through Playwright using a temporary copy of the local logged-in profile.
+- Visit each target in the `targets` array.
+- Expand collapsed Zhihu content when needed.
+- Select the right article or answer body.
+- Clean the body into portable HTML.
+- Download and compress images.
+- Write:
+  - `article-export-sample/content/<slug>/index.html`
+  - `article-export-sample/content/<slug>/index.md`
+  - `article-export-sample/content/<slug>/images.json`
+  - `article-export-sample/export-report.json`
+
+Key target fields:
+
+```js
+{
+  kind: 'answer' | 'article',
+  slug: 'stable-output-folder-name',
+  titleHint: 'fallback title',
+  url: 'https://www.zhihu.com/...'
+}
+```
+
+To export another article, add another object to `targets`, rerun the full pipeline, then update preview metadata in the homepage if it should appear on the main page.
+
+### `scripts/build-zhihu-preview-pages.mjs`
+
+This builds homepage-style static pages from `article-export-sample/`.
+
+Responsibilities:
+
+- Copy assets into `public/zhihu/assets`.
+- Build one page per exported article under `public/zhihu/<slug>/index.html`.
+- Build `public/zhihu/index.html`.
+- Keep styling close to the personal homepage.
+- Preserve top publish-time metadata.
+- Load MathJax for formulas.
+
+### `scripts/build-zhihu-article-repo.mjs`
+
+This prepares the standalone article repository at `../zhihu-articles`.
+
+Responsibilities:
+
+- Recreate the output directory from scratch.
+- Copy `content/<slug>/` for source Markdown/HTML.
+- Build `docs/` pages from the homepage preview pages, but rewrite paths for a standalone repo.
+- Copy only compressed public images to `docs/assets/`.
+- Do not copy `original/` image backups.
+- Write `README.md`, `.gitignore`, and `docs/.nojekyll`.
+
+GitHub Pages should be configured to serve from `main` / `docs`.
+
+## Cleaning Rules
+
+Keep these rules stable across future work:
+
+### Links
+
+Allowed:
+
+- Normal external references.
+- Link cards converted from Zhihu rich link cards.
+- Real targets extracted from `https://link.zhihu.com/?target=...`.
+
+Removed or rewritten:
+
+- `zhida.zhihu.com/search` links become plain text.
+- `a.RichContent-EntityWord` becomes plain text.
+- `file:///C:/...` and `C:/...` links become plain text.
+
+Rationale: Zhihu Direct entity links create misleading blue keywords, and local absolute links are broken after publication.
+
+### Link Cards
+
+Zhihu rich link cards are converted to:
+
+```html
+<a class="export-link-card"
+   data-export-kind="link-card"
+   data-title="..."
+   data-desc="..."
+   href="...">
+  <span class="export-link-card-title">...</span>
+  <span class="export-link-card-desc">...</span>
+</a>
+```
+
+The Markdown exporter turns these into normal Markdown links instead of dropping them.
+
+### Dates
+
+Publish time is required at the top of exported HTML:
+
+```html
+<p class="export-meta">发布时间：YYYY-MM-DD HH:mm</p>
+```
+
+Markdown front matter must contain:
+
+```yaml
+date: YYYY-MM-DD
+```
+
+Important: for answers, do not use page-level question metadata. Use the current `.ContentItem.AnswerItem` matching the answer URL, otherwise the question creation date may be incorrectly exported.
+
+### Images
+
+Image handling is quality-constrained:
+
+- Original downloaded files are kept in `article-export-sample/assets/<slug>/original/`.
+- Photo-like images are encoded as WebP quality 82, effort 6.
+- Long edge is capped at 2200 px.
+- Non-photo images become optimized palette PNG.
+- If compression is not at least about 2 percent smaller, keep the source image.
+- Standalone `../zhihu-articles` publishes only compressed images, not the `original/` backup folders.
+
+## Zhihu Formula Rendering
+
+Zhihu stores formulas as HTML nodes like:
+
+```html
+<span class="ztext-math" data-eeimg="1" data-tex="...">
+  <span class="tex2jax_ignore math-holder">...</span>
+</span>
+```
+
+Exporter rule:
+
+- Read `.ztext-math[data-tex]`.
+- Normalize whitespace.
+- Remove trailing `\\` linebreak markers.
+- Treat `data-eeimg="1"` as inline math.
+- Treat `data-eeimg="2"` as display math.
+
+Generated HTML:
+
+```html
+<span class="export-math export-math-inline"
+      data-export-kind="math"
+      data-display="false"
+      data-tex="...">\( ... \)</span>
+
+<span class="export-math export-math-display"
+      data-export-kind="math"
+      data-display="true"
+      data-tex="...">\[ ... \]</span>
+```
+
+Generated Markdown:
+
+```markdown
+$...$
+
+$$
+...
+$$
+```
+
+Generated HTML pages include MathJax:
+
+```html
+<script>
+  window.MathJax = {
+    tex: {
+      inlineMath: [['\\(', '\\)']],
+      displayMath: [['\\[', '\\]']],
+      processEscapes: true
+    },
+    svg: { fontCache: 'global' },
+    options: { skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'] }
+  };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+```
+
+CSS keeps display formulas readable on mobile:
+
+```css
+.export-math-display {
+  display: block;
+  max-width: 100%;
+  margin: 1rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+mjx-container {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+```
+
+## Browser Verification
+
+If the in-app browser tool is not available, use Playwright with local Edge:
+
+```powershell
+@'
+const { chromium } = require('playwright');
+const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: edgePath, headless: true });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.goto('http://127.0.0.1:4174/zhihu/article-color-bit-depth/', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.MathJax?.startup?.promise, null, { timeout: 15000 }).catch(() => {});
+  await page.evaluate(() => window.MathJax?.typesetPromise?.()).catch(() => {});
+  await page.waitForTimeout(1000);
+  console.log(await page.evaluate(() => ({
+    mathSourceCount: document.querySelectorAll('[data-export-kind="math"]').length,
+    mathJaxCount: document.querySelectorAll('mjx-container').length,
+    brokenImages: Array.from(document.images).filter((img) => !img.complete || img.naturalWidth === 0).length,
+    badLinks: Array.from(document.querySelectorAll('a')).filter((a) => /zhida\.zhihu\.com|file:|C:\/Users/.test(a.href)).length,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  })));
+  await browser.close();
+})();
+'@ | node -
+```
+
+Expected for the current formula-heavy article:
+
+- `mathSourceCount = 21`
+- `mathJaxCount = 21`
+- `brokenImages = 0`
+- `badLinks = 0`
+- desktop `scrollWidth = clientWidth`
+- mobile `scrollWidth = clientWidth`
+
+## Local Preview Servers
+
+Homepage production preview:
+
+```powershell
+node .\node_modules\vite\bin\vite.js preview --host 127.0.0.1 --port 4174
+```
+
+Standalone repo docs preview:
+
+```powershell
+C:\Python314\python.exe -m http.server 4185 --bind 127.0.0.1
+```
+
+Run the Python server from:
+
+```text
+C:\Users\bcm18\Downloads\新主页\zhihu-articles\docs
+```
+
+If `build:zhihu:repo` fails with `EBUSY`, stop the Python server because it may be holding `../zhihu-articles/docs`.
+
+## Publishing
+
+The machine may not have Git or GitHub CLI. If Git becomes available:
+
+```powershell
+cd C:\Users\bcm18\Downloads\新主页\zhihu-articles
+git init -b main
+git add .
+git commit -m "Publish Zhihu article exports"
+git remote add origin https://github.com/y-g-jiang/<repo-name>.git
+git push -u origin main
+```
+
+Then enable GitHub Pages from:
+
+```text
+branch: main
+folder: /docs
+```
+
+Do not create or publish a public remote repository without explicit confirmation from the user.
+
+## Known Current Pages
+
+Current generated page URLs during local validation:
+
+- Homepage list: `http://127.0.0.1:4174/#zhihu-preview`
+- Homepage answer preview: `http://127.0.0.1:4174/zhihu/answer-100gm-decenter-simulation/`
+- Homepage article preview: `http://127.0.0.1:4174/zhihu/article-color-bit-depth/`
+- Standalone repo list: `http://127.0.0.1:4185/`
+- Standalone repo article: `http://127.0.0.1:4185/article-color-bit-depth/`

@@ -1,0 +1,58 @@
+{
+  "generatedAt": "2026-06-20T19:15:18.899Z",
+  "maxConcurrency": 14,
+  "browser": {
+    "executablePath": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "profileSource": "C:\\Users\\bcm18\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default",
+    "usedTemporaryProfile": true,
+    "headless": false
+  },
+  "targets": [
+    {
+      "kind": "answer",
+      "slug": "answer-100gm-decenter-simulation",
+      "titleHint": "100GM歪轴仿真报告",
+      "url": "https://www.zhihu.com/question/300139587/answer/2038319263958741552"
+    },
+    {
+      "kind": "article",
+      "slug": "article-color-bit-depth",
+      "titleHint": "关于色彩位深-bit数",
+      "url": "https://zhuanlan.zhihu.com/p/2049616049604244194"
+    }
+  ],
+  "results": [
+    {
+      "ok": true,
+      "kind": "answer",
+      "slug": "answer-100gm-decenter-simulation",
+      "url": "https://www.zhihu.com/question/300139587/answer/2038319263958741552",
+      "title": "如何判断镜头光轴有偏移？",
+      "publishedAt": "2026-05-14T10:06:22.000Z",
+      "modifiedAt": "2026-05-14T10:06:22.000Z",
+      "textLength": 3034,
+      "markdown": "content/answer-100gm-decenter-simulation/index.md",
+      "html": "content/answer-100gm-decenter-simulation/index.html",
+      "imageCount": 6,
+      "imageOkCount": 6,
+      "imageOriginalBytes": 1953875,
+      "imageOutputBytes": 778588
+    },
+    {
+      "ok": true,
+      "kind": "article",
+      "slug": "article-color-bit-depth",
+      "url": "https://zhuanlan.zhihu.com/p/2049616049604244194",
+      "title": "相机史诗级智商税：色彩位深/bit数",
+      "publishedAt": "2026-06-15T13:25:18.000Z",
+      "modifiedAt": "2026-06-16T15:52:32.000Z",
+      "textLength": 5193,
+      "markdown": "content/article-color-bit-depth/index.md",
+      "html": "content/article-color-bit-depth/index.html",
+      "imageCount": 8,
+      "imageOkCount": 8,
+      "imageOriginalBytes": 2612740,
+      "imageOutputBytes": 1470400
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "zhihu-answer-article-exporter",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Export Jiang Yaogeng's Zhihu answers/articles into portable Markdown, rendered HTML, homepage-style previews, and GitHub Pages-ready docs.",
+  "scripts": {
+    "export": "node scripts/export-zhihu-sample.mjs",
+    "build:preview": "node scripts/build-zhihu-preview-pages.mjs",
+    "build:repo": "node scripts/build-zhihu-article-repo.mjs",
+    "build": "node scripts/build-zhihu-preview-pages.mjs && node scripts/build-zhihu-article-repo.mjs",
+    "check": "node --check scripts/export-zhihu-sample.mjs && node --check scripts/build-zhihu-preview-pages.mjs && node --check scripts/build-zhihu-article-repo.mjs && node --check scripts/publish-github.mjs",
+    "publish:github": "node scripts/publish-github.mjs"
+  },
+  "dependencies": {
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.0",
+    "sharp": "^0.35.2"
+  }
+}
